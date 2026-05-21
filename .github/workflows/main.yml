@@ -2,6 +2,9 @@ name: "VPN"
 on:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   vpn:
     runs-on: ubuntu-latest
@@ -9,6 +12,8 @@ jobs:
     
     steps:
       - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
       
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -28,7 +33,7 @@ jobs:
           <div class="content" id="content"></div>
           <div class="status" id="status">🟢 آماده</div>
           <script>
-            const REPO = window.location.hostname === 'localhost' ? 'demo/repo' : window.location.pathname.split('/')[1] + '/' + window.location.pathname.split('/')[2];
+            const REPO = '${{ github.repository }}';
             async function fetchPage(url){
               document.getElementById('status').innerHTML='⏳ ارسال...';
               document.getElementById('content').innerHTML='';
@@ -53,7 +58,7 @@ jobs:
                 throw new Error('Timeout');
               }catch(e){document.getElementById('status').innerHTML='❌ '+e.message;}
             }
-            function escapeHtml(s){return s.replace(/[&<>]/g,function(m){return m==='&'?'&amp;':m==='<'?'&lt;':'&gt;';});}
+            function escapeHtml(s){return s.replace(/[&<>]/g,function(m){return m==='&'?'&amp;':m==='<'?'&lt;':m==='>'?'&gt;':m;});}
             document.getElementById('go').onclick=()=>fetchPage(document.getElementById('url').value);
             fetchPage('https://google.com');
           </script>
@@ -64,7 +69,14 @@ jobs:
           cat > server.js << 'EOF'
           const fs=require('fs'),{execSync}=require('child_process'),http=require('http'),https=require('https'),url=require('url');
           const reqFile='req.json',resFile='res.json';
+          const TOKEN=process.env.GITHUB_TOKEN;
+          const REPO=process.env.GITHUB_REPOSITORY;
+          const BRANCH=process.env.GITHUB_REF_NAME||'main';
+          const REMOTE=`https://x-access-token:${TOKEN}@github.com/${REPO}.git`;
+          
           function sleep(ms){return new Promise(r=>setTimeout(r,ms));}
+          function git(cmd){execSync(`git ${cmd}`,{stdio:'pipe',env:{...process.env,GIT_ASKPASS:'echo'}});}
+          
           async function loop(){
             while(true){
               try{
@@ -82,9 +94,13 @@ jobs:
                     }).end();
                   });
                   fs.writeFileSync(resFile,JSON.stringify({status:'done',body:response.body,type:response.type}));
-                  execSync(`git add ${resFile} && git commit -m res --allow-empty && git push`,{stdio:'pipe'});
+                  git(`add ${resFile}`);
+                  git(`commit -m res --allow-empty`);
+                  git(`push ${REMOTE} HEAD:${BRANCH}`);
                   fs.writeFileSync(reqFile,JSON.stringify({status:'waiting'}));
-                  execSync(`git add ${reqFile} && git commit -m req --allow-empty && git push`,{stdio:'pipe'});
+                  git(`add ${reqFile}`);
+                  git(`commit -m req --allow-empty`);
+                  git(`push ${REMOTE} HEAD:${BRANCH}`);
                   console.log('📥 Done');
                 }
               }catch(e){console.log(e.message);}
@@ -94,9 +110,10 @@ jobs:
           loop();
           EOF
           
-          git config user.name "bot"
-          git config user.email "bot@local"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
           echo '{"status":"waiting"}' > req.json
           echo '{"status":"waiting"}' > res.json
-          git add . && git commit -m "init" && git push
+          git add . && git commit -m "init" || true
+          git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git HEAD:${{ github.ref_name || 'main' }} || true
           node server.js
